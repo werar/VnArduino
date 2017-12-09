@@ -1,0 +1,20 @@
+
+void calculDut(int adcMag, int adcPhs);
+void magPhsADC();
+void Jnva();
+void vna_print_unites();
+void calibration();
+void delete_char(byte line, byte start, byte end);
+void bandSelect();
+void vna_print_unites();
+void vna_print();
+void mesure();
+void BCD (unsigned long b, char* o);
+double ticksToFreq(long f);
+void doEncoder();
+void boot_menu();
+void menuJvna(byte PB);
+void sweep();
+char DecodeCom (void);
+void affiche_freqs(void);
+char getRX(void);
