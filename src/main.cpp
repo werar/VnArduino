@@ -59,7 +59,15 @@ exemple : retrouver la fréquence a partir de DS_FTW
 74082466 * 180000000 / 4294967296.0 = 3104760,28 HZ
 
 */
+//TODO: use some popular rotary library
 //TODO: fix probelm with standard LiquidCrystal_I2C.h library (used as dependency has some compilatioin errors)
+//TODO: check DDS hardware modifiaction (LP filter) to extend  frequency range
+//TODO: use english coments
+//TODO: use main.h file
+//TODO: fix magic number
+//TODO: use oversampling https://github.com/stylesuxx/Oversample or external 12bit ADC
+//TODO: do not use TimeONe lib (direct configuration needed)
+//TODO: hardware modification (filer) described here: https://www.edn.com/design/test-and-measurement/4441389/2/Optimizing-Arduino-and-the-AD9851-DDS-signal-generator
 
 #include <avr/pgmspace.h>
 #include <Wire.h>
@@ -67,17 +75,12 @@ exemple : retrouver la fréquence a partir de DS_FTW
 #include <AD9850SPI.h>
 #include <SPI.h>
 #include <EEPROM.h>
+#include <ClickEncoder.h>
+#include <TimerOne.h>
 
 
-#define MinFrq 23860900 // FTW  min freq = 1 Mhz
-//#define MaxFrq 1431655765 // FTW  max freq = 60 Mhz
-#define MaxFrq 2431655765 // FTW  max freq = 60 Mhz
-#define freqMin  1000000
-#define freqMax 60000000
+#include "main.h"
 
-
-#define PowerDown 0x04  //  Power down AD9851,50
-#define Normal 0x01     //  AD9851 RFCLK multiplier enable x 6 en mode normal
 
 unsigned char Mode;       //mode powerdown ou normal
 unsigned long  StartF;    //DS_FTW fréquence de départ
@@ -86,24 +89,9 @@ unsigned long  StepF;     //Fréquence d'incrémentation en FTW (non en HZ)
 
 //char Temp;
 unsigned int intTemp;    //variable de boucle pour le balayage
-unsigned int adcmag;     //variables des 2 ADC mesures
+unsigned int adcmag;     //variables des 2 ADC measures
 unsigned int adcphs;
 boolean check=0;
-
-#define led  6        //Affectation des broches
-#define Rele  5       //relais refexion, transmission
-#define ADC0  A0       //entrée mag
-#define ADC1  A1      //entrée phs
-
-#define  dpInEncoderA  2
-#define  dpInEncoderB  3
-#define  dpInEncoderPress 4
-
-
-#define adc2Db 60/1024  // pente pleine echelle Db / resolution ADC = 0.0586
-#define offsetDb -30  // décallage de -30db, pour ADC=512 -> 0db
-#define Adc2Angle 180/1024  // pente pleine echelle Angle / resolution ADC = 0.175
-#define D2R 3.14159/180    //degrés to radians
 
 
 //#define calMag 0.703125      //before calibrate function
@@ -112,23 +100,7 @@ boolean check=0;
 float calMag;
 float calPhs;
 
-struct vector_reflection{
-  double Freq;
-  float RL;
-  float Phi;
-  float Rho;
-  float Rs;
-  float Xs;
-  float Swr;
-  float Z;
-};
-vector_reflection Point;
-
-struct vector_transmission{
-  double Freq;
-  float TL;
-  float TP;
-};
+vector_reflection point;
 
 volatile long freq = 5000000;
 byte vnaMode=0;
@@ -143,97 +115,90 @@ long freq_prec = 0;
 long freqStep = 0;
 
 
-void delete_char(byte line, byte start, byte end);
-void calculDut(int adcMag, int adcPhs);
-void vna_print();
-void calibration();
-void vna_print_unites();
-void bandSelect();
-void BCD (unsigned long b, char* o);
-double ticksToFreq(long f);
-void mesure();
-void doEncoder();
-void boot_menu();
-void menuJvna(byte PB);
-char getRX(void);
-void Jnva();
-void sweep();
-char DecodeCom (void);
-void affiche_freqs(void);
-void magPhsADC();
+LiquidCrystal_I2C lcd(0x27, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE); //TODO: remove POSITIVE
+ClickEncoder *encoder;
+ClickEncoder::Button b;
 
-LiquidCrystal_I2C lcd(0x27, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE);
 
-void(* resetFunc) (void) = 0; //declare reset function @ address 0
+volatile int16_t rotary_encoder_last, rotary_encoder_value;
 
-int freeRam ()
-{
-  extern int __heap_start, *__brkval;
-  int v;
-  return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
+/********************************************************
+ * interrupts
+ ********************************************************/
+
+void doEncoder() { //TODO: here only change rotarty counters menu/band varabiles migrate to their main places
+
+  rotary_encoder_value=encoder->getValue();
+  if(rotary_encoder_value!=0){
+    menuSwapp=(menuSwapp+1)%4;
+    freq=freq+freqStep*rotary_encoder_value;
+    if (freq>freqMax) freq=freqMax;
+    if (freq<freqMin) freq=freqMin;
+    //rotary_encoder_last=rotary_encoder_value;
+  }
+
 }
 
-void setup(){
+void timerIsr() {
+  encoder->service();
+}
 
-lcd.begin(4, 20);  //4 lines *20 columns lcd char
-lcd.setBacklight(HIGH);
-Serial.begin(115200);
-pinMode(led, OUTPUT);
-pinMode(Rele, OUTPUT);
-DDS.begin(13,8,7);  // dans l'ordre broches W_CLK, FQ_UD et RESET
-//DDS.calibrate(180000000);    //pas utile dans l'immédiat mais on ne sait jamais
-analogReference(EXTERNAL);  //tension de référence extérieure 1.8V de l'ad8302
+void setup()
+{
+  lcd.begin(4, LCD_CHARS_IN_ROW);  //4 lines *20 columns lcd char
+  lcd.setBacklight(HIGH);
+  Serial.begin(115200);
+  pinMode(LED, OUTPUT);
+  pinMode(Rele, OUTPUT);
+  DDS.begin(13,8,7);  // dans l'ordre broches W_CLK, FQ_UD et RESET
+  //DDS.calibrate(180000000);    //pas utile dans l'immédiat mais on ne sait jamais
+  analogReference(EXTERNAL);  //tension de référence extérieure 1.8V de l'ad8302
+  //A véfifier si utile
+  dds_reg=((double)freq) * 4294967296.0 / 180000000.0;
+  DDS.vna(dds_reg,Normal);
+  delay(1);
+  DDS.vna(dds_reg,PowerDown);
+  pinMode(dpInEncoderA, INPUT);
+  digitalWrite(dpInEncoderA, HIGH);
+  pinMode(dpInEncoderB, INPUT);
+  digitalWrite(dpInEncoderB, HIGH);
+  pinMode(dpInEncoderPress, INPUT);
+  digitalWrite(dpInEncoderPress, HIGH);
 
-
-//A véfifier si utile
-dds_reg=((double)freq) * 4294967296.0 / 180000000.0;
-DDS.vna(dds_reg,Normal);
-delay(1);
-DDS.vna(dds_reg,PowerDown);
-
-pinMode(dpInEncoderA, INPUT);
-digitalWrite(dpInEncoderA, HIGH);
-pinMode(dpInEncoderB, INPUT);
-digitalWrite(dpInEncoderB, HIGH);
-pinMode(dpInEncoderPress, INPUT);
-digitalWrite(dpInEncoderPress, HIGH);
-
-adcmag=EEPROM.read(2)*256+EEPROM.read(1);
-adcphs=EEPROM.read(4)*256+EEPROM.read(3);
-calMag=((float)adcmag*adc2Db)+offsetDb;
-calPhs=((float)adcphs*Adc2Angle);
-//Serial.println(calMag);              //verif calibration
-//Serial.println(calPhs);
+  adcmag=EEPROM.read(2)*256+EEPROM.read(1);
+  adcphs=EEPROM.read(4)*256+EEPROM.read(3);
+  calMag=((float)adcmag*adc2Db)+offsetDb;
+  calPhs=((float)adcphs*Adc2Angle);
+  //Serial.println(calMag);              //verif calibration
+  //Serial.println(calPhs);
 
   lcd.clear();
-  lcd.print(F("VNA v1.0"));    //intro
+  lcd.print(F("VNA v1.1"));    //intro
   lcd.setCursor(0, 1);
-  lcd.print(F("F4GOH 2015"));
-  delay(4000);
+  lcd.print(F("SQ6KXQ 2018"));
+  lcd.setCursor(0, 2);
+  lcd.print(F("Boot menu->press key"));
+
+  delay(2000);
   lcd.clear();
 
-attachInterrupt(0, doEncoder, CHANGE);  // encoder pin on interrupt 0 - pin 2
-boot_menu();
-
-
-menuChoose=EEPROM.read(0);
-
-switch(menuChoose)
-{
-case 0 :  menuJvna(0);   break;          //pc
-case 1 :  menuJvna(1);  check=0; break;  //bluetooth
-case 2 :  bandSelect(); break;           //standalone
+  encoder = new ClickEncoder(dpInEncoderA, dpInEncoderB, dpInEncoderPress);
+  Timer1.initialize(1000);
+  Timer1.attachInterrupt(timerIsr);
+  attachInterrupt(0, doEncoder, CHANGE);  // encoder pin on interrupt 0 - pin 2
+  boot_menu();
+  menuChoose=EEPROM.read(0);
+  switch(menuChoose)
+  {
+  case 0 :  menuJvna(0);   break;          //pc
+  case 1 :  menuJvna(1);  check=0; break;  //bluetooth
+  case 2 :  bandSelect(); break;           //standalone
 }
-
 }
-
-
-
 
 //main loop
 
 void loop(){
-//menuChoose=0; //TODO delete that
 switch(menuChoose)
 {
 case 0 :  Jnva();   break;      //jvna
@@ -246,57 +211,54 @@ case 2 :  sweep();  break;      //standalone
 /********************************************************
  * Jvna
  ********************************************************/
-
 void Jnva()
 {
-         char Temp;
-         Serial.flush();
+  char Temp;
+  Serial.flush();
+  Temp = DecodeCom(); //acuisition et décodage d'une demande de measure en provenance du logiciel IG_miniVNA
+  if (menuChoose==1)
+  {
+    StartF=(StartF/9)*20;
+    StepF=(StepF/9)*20;
+  }
+  affiche_freqs();    //pour debug
 
-         Temp = DecodeCom(); //acuisition et décodage d'une demande de mesure en provenance du logiciel IG_miniVNA
-       if (menuChoose==1) {
-                         StartF=(StartF/9)*20;
-                         StepF=(StepF/9)*20;
-                         }
-         affiche_freqs();    //pour debug
-
-
- if ((Temp==0) && (NumberF!=0)) // si le décodage est bon et que le nombre d'échantillons n'est pas nul alors mesure
-          {
-            digitalWrite(led, HIGH);      //vérification visuelle de la mesure
-          if (Mode == 0) digitalWrite(Rele, LOW);   // commande relais tansmission 0 ou refection 1
-                else digitalWrite(Rele, HIGH);
-
-          for (intTemp=0; intTemp < NumberF; intTemp++)    //boucle des mesures
-            {
-           if ((StartF >= MinFrq) && (StartF <= MaxFrq)) {
-                                   Mode = Normal;   // pour faire une mesure  F > 0,5 mhz
-                                  }
-                                  else {
-                                        Mode = PowerDown;  // F < 0,5 mhz, sinon Power Down ajouter test si F>fmax alors power down
-                                       }
-            DDS.vna(StartF,Mode);       //fonction dédiée au vna pour le dds 9851 meme si la lib est 9850
-                                        // si le 9850 est utilisé, Normal doit etre à 0
+ if ((Temp==0) && (NumberF!=0)) // si le décodage est bon et que le nombre d'échantillons n'est pas nul alors measure
+ {
+   digitalWrite(LED, HIGH);      //vérification visuelle de la measure
+   if (Mode == 0) digitalWrite(Rele, LOW);   // commande relais tansmission 0 ou refection 1
+   else digitalWrite(Rele, HIGH);
+   for (intTemp=0; intTemp < NumberF; intTemp++)    //boucle des measures
+   {
+     if ((StartF >= MinFrq) && (StartF <= MaxFrq))
+     {
+       Mode = Normal;   // pour faire une measure  F > 0,5 mhz
+      }else
+      {
+        Mode = PowerDown;  // F < 0,5 mhz, sinon Power Down ajouter test si F>fmax alors power down
+      }
+      DDS.vna(StartF,Mode);       //fonction dédiée au vna pour le dds 9851 meme si la lib est 9850
+                                      // si le 9850 est utilisé, Normal doit etre à 0
             //delay(1);
-            magPhsADC();
-            Serial.write((byte)adcphs);     // LSB
-            Serial.write((byte)(adcphs>>8));     // MSB
-            Serial.write((byte)adcmag);     // LSB
-            Serial.write((byte)(adcmag>>8));     // MSB
-            StartF = StartF+StepF;
-            }
-          }
- digitalWrite(led, LOW);        //fin de mesure
-
+      magPhsADC();
+      Serial.write((byte)adcphs);     // LSB
+      Serial.write((byte)(adcphs>>8));     // MSB
+      Serial.write((byte)adcmag);     // LSB
+      Serial.write((byte)(adcmag>>8));     // MSB
+      StartF = StartF+StepF;
+    }
+  }
+  digitalWrite(LED, LOW);        //fin de measure
 }
 
-void magPhsADC()  //average 20 ech
+void magPhsADC()  //TODO: use oversampling
 {
 unsigned int amp;
 unsigned int phs;
             amp=0;
             phs=0;
             for (int n=0;n<20;n++){
-                              amp = amp +  analogRead(ADC0);   //mesure 10 bits
+                              amp = amp +  analogRead(ADC0);   //measure 10 bits
                               phs = phs + analogRead(ADC1);
             }
             adcmag=amp/20;
@@ -390,31 +352,33 @@ mode bluetooth 115200 bauds
 
 char getRX(void)
 {
-char data=0;
-do
-{
- if (Serial.available()) {
-                         data=Serial.read();
-                         if(check==0) {
-                                     if (data==0x0D) {
-                                                   data=0;
-                                                    while (data!=0x0d)
-                                                    {
-                                                    if (Serial.available()) data=Serial.read();
-                                                    }
-                                                    while (data!='0')
-                                                    {
-                                                    if (Serial.available()) data=Serial.read();
-                                                    }
-                                                 }
-                                     }
-                                     check=1;
-                       }
+  char data=0;
+  do
+  {
+    if (Serial.available())
+    {
+      data=Serial.read();
+      if(check==0)
+      {
+        if (data==0x0D)
+        {
+          data=0;
+          while (data!=0x0d)
+          {
+            if (Serial.available()) data=Serial.read();
+          }
+          while (data!='0')
+          {
+            if (Serial.available()) data=Serial.read();
+          }
+        }
+      }
+      check=1;
+    }
 }
 while((data != 0x0D)&&(isdigit(data) !=1));
 return data;
 }
-
 
 
 void affiche_freqs(void)
@@ -436,14 +400,14 @@ void affiche_freqs(void)
 
 double ticksToFreq(long f)
 {
- return ((double)f) * 180000000.0 / 4294967296.0;
+ return ((double)f) * 180000000.0 / 4294967296.0;  //TODO: magic number
 }
 
 
 void menuJvna(byte PB)
 {
   lcd.clear();
- if (PB==0)   lcd.print(F("JVna PC"));  else  lcd.print(F("Blue Vna Android"));
+  lcd.print(PB==0?F("JVna PC"):F("Blue Vna Android"));
   lcd.setCursor(0, 1);
   lcd.print(F("Fstart:"));
   lcd.setCursor(0, 2);
@@ -469,7 +433,7 @@ void sweep()
 {
 char tab[10];
 int freqLcd;
-byte bpState=0;
+
 if (freq!=freq_prec){
                    double dds_reg=((double)freq) * 4294967296.0 / 180000000.0;
                    DDS.vna(dds_reg,Normal);
@@ -481,12 +445,13 @@ if (freq!=freq_prec){
                    lcd.write(46);
                    lcd.write(tab[5]);
                    lcd.write(tab[4]);
-                   mesure();
+                   measure();
                    }
-
-if (digitalRead(dpInEncoderPress)==0) bpState|=1;
-if (bpState==1) bandSelect();
-bpState=(bpState<<1)&3;
+      b=encoder->getButton();
+      if(b==ClickEncoder::Clicked)
+      {
+         bandSelect();
+      }
 }
 
 void BCD (unsigned long b, char* o)
@@ -502,7 +467,7 @@ void BCD (unsigned long b, char* o)
 
 
 
-void mesure()
+void measure()
 {
 
 magPhsADC();
@@ -510,31 +475,31 @@ calculDut(adcmag,adcphs);
 vna_print();
 delete_char(1,3,9);
 lcd.setCursor(3, 1);
-lcd.print((int)Point.RL);
+lcd.print((int)point.RL);
 lcd.print(F("dB"));
 delete_char(2,4,9);
 lcd.setCursor(4, 2);
-lcd.print((int)Point.Phi);
+lcd.print((int)point.Phi);
 lcd.write(0xdf);
 delete_char(1,13,19);
 lcd.setCursor(13, 1);
-lcd.print((int)Point.Rs);
+lcd.print((int)point.Rs);
 lcd.write(0xf4);
 delete_char(2,13,19);
 lcd.setCursor(13, 2);
-lcd.print((int)Point.Xs);
+lcd.print((int)point.Xs);
 lcd.write(0xf4);
 delete_char(3,2,9);
 lcd.setCursor(2, 3);
-lcd.print((int)Point.Z);
+lcd.print((int)point.Z);
 lcd.write(0xf4);
 delete_char(3,14,19);
 lcd.setCursor(14, 3);
-if (Point.Swr>=1)
+if (point.Swr>=1)
 {
-lcd.print((int)Point.Swr);
+lcd.print((int)point.Swr);
 lcd.write(46);
-byte tempSwr=(int)((Point.Swr-(int)(Point.Swr))*100);
+byte tempSwr=(int)((point.Swr-(int)(point.Swr))*100);
 if (tempSwr/10==0) lcd.write(48);
 lcd.print(tempSwr);
 }
@@ -574,18 +539,18 @@ SWR=(1+Rho)/(1-Rho)
 
 void calculDut(int adcMag, int adcPhs)
 {
-Point.Freq=freq;
-Point.RL=((float)adcMag*adc2Db)+offsetDb-calMag;
-Point.Phi=((float)adcPhs*Adc2Angle)-calPhs;
-Point.Rho=pow(10.0,Point.RL/-20.0);
-float re=Point.Rho*cos(Point.Phi * D2R);
-float im=Point.Rho*sin(Point.Phi * D2R);
+point.Freq=freq;
+point.RL=((float)adcMag*adc2Db)+offsetDb-calMag;
+point.Phi=((float)adcPhs*Adc2Angle)-calPhs;
+point.Rho=pow(10.0,point.RL/-20.0);
+float re=point.Rho*cos(point.Phi * D2R);
+float im=point.Rho*sin(point.Phi * D2R);
 float denominator=((1-re)*(1-re)+(im*im));
-Point.Rs=fabs((1-(re*re)-(im*im))/denominator)*50.0;
-Point.Xs=fabs(2.0*im)/denominator*50.0;
-Point.Z=sqrt(Point.Rs*Point.Rs+Point.Xs*Point.Xs);
-Point.Swr=fabs(1.0+Point.Rho)/(1.001-Point.Rho);
-Point.RL*=-1;
+point.Rs=fabs((1-(re*re)-(im*im))/denominator)*50.0;
+point.Xs=fabs(2.0*im)/denominator*50.0;
+point.Z=sqrt(point.Rs*point.Rs+point.Xs*point.Xs);
+point.Swr=fabs(1.0+point.Rho)/(1.001-point.Rho);
+point.RL*=-1;
 }
 
 void vna_print()
@@ -596,38 +561,23 @@ Serial.print(adcmag);
 Serial.write(9);
 Serial.print(adcphs);
 Serial.write(9);
-Serial.print(Point.RL);
+Serial.print(point.RL);
 Serial.write(9);
-Serial.print(Point.Phi);
+Serial.print(point.Phi);
 Serial.write(9);
-Serial.print(Point.Rho);
+Serial.print(point.Rho);
 Serial.write(9);
-Serial.print(Point.Rs);
+Serial.print(point.Rs);
 Serial.write(9);
-Serial.print(Point.Xs);
+Serial.print(point.Xs);
 Serial.write(9);
-Serial.print(Point.Z);
+Serial.print(point.Z);
 Serial.write(9);
-Serial.println(Point.Swr);
+Serial.println(point.Swr);
 }
 
 
-/********************************************************
- * Encoder
- ********************************************************/
 
-void doEncoder() {
-  if (digitalRead(dpInEncoderA) == digitalRead(dpInEncoderB)) {
-    menuSwapp=(menuSwapp+1)%4;
-    bandSwappPrec=bandSwapp;
-    bandSwapp=(bandSwapp+1)%12;
-    freq+=freqStep;
-    if (freq>freqMax) freq=freqMax;
-  } else {
-    freq-=freqStep;
-    if (freq<freqMin) freq=freqMin;
-  }
-}
 
 /********************************************************
  * Lcd menus
@@ -657,8 +607,8 @@ void lcd_menu_analyse_refection()
 
 void boot_menu()
 {
-  const uint8_t row_lines=2;
-  if (digitalRead(dpInEncoderPress)==1) return;
+  uint8_t const menu_items_number=3;
+  if (digitalRead(dpInEncoderPress)==1) return; //if rotary button is not pressed do not show the menu above
   lcd.clear();
   lcd.setCursor(1, 0);
   lcd.print(F("JVna PC"));
@@ -670,23 +620,28 @@ void boot_menu()
   lcd.print(F("Calib. V1.0"));
   while(digitalRead(dpInEncoderPress)==0) {}  //BP rise down detect
   while(digitalRead(dpInEncoderPress)==1) {
-  for (byte n=0;n<=3;n++) {
-        lcd.setCursor(0, n);
-        if (menuSwapp==n) lcd.write(42); else lcd.write(32);
-        }
+  for (byte n=0;n<=menu_items_number;n++)
+  {
+    lcd.setCursor(0, n);
+    if (menuSwapp==n) lcd.write(42); else lcd.write(32);
+  }
   }
   menuChoose=menuSwapp;
-  for (byte n=0;n<3;n++) {
-          if (menuChoose!=n) {
-                           for (byte m=0;m<20;m++) {
-                              lcd.setCursor(m, n);
-                              lcd.write(32);
-                           }
-        }
+  for (uint8_t n=0;n<menu_items_number;n++)
+  {
+    if (menuChoose!=n)
+    {
+      for (uint8_t m=0;m<LCD_CHARS_IN_ROW;m++)
+      {
+        lcd.setCursor(m, n);
+        lcd.write(32);
+      }
+    }
   }
   delay(1000);
   if (menuChoose<3) EEPROM.write(0,menuChoose); else calibration();
-  resetFunc();  //call reset
+  return;
+  //resetFunc();  //call reset
 }
 
 
@@ -702,19 +657,31 @@ void bandSelect()
   lcd.setCursor(1, 3);
   lcd.print(F(" 10m   6m   Free"));
   delay(100);    //pour le bp
-  while(digitalRead(dpInEncoderPress)==0) {}  //BP rise down detect
-  while(digitalRead(dpInEncoderPress)==1) {
+  ClickEncoder::Button b ;
+  while( (b=encoder->getButton())== ClickEncoder::Open){
   byte x,y;
-  x=(bandSwappPrec%3)*6;
-  y=(bandSwappPrec/3);
+
+  rotary_encoder_value=encoder->getValue();
+  if(rotary_encoder_value!=rotary_encoder_last)
+  {
+    rotary_encoder_last=rotary_encoder_value;
+    bandSwappPrec=bandSwapp;
+    bandSwapp=(bandSwapp+rotary_encoder_value)%12;
+  }
+
+
+  //remowe old mark
+  x=(bandSwappPrec%3)*6; //3 items in rows every 6 characters
+  y=(bandSwappPrec/3); //11 bands in total grouped 3 by row
   lcd.setCursor(x, y);
   lcd.write(32);
+  //mark new selected band
   x=(bandSwapp%3)*6;
   y=(bandSwapp/3);
   lcd.setCursor(x, y);
-  lcd.write(42);
-
-  }
+  lcd.write(STAR_SYMBOL);
+}
+  //}
   delay(100);    //pour le bp
   bandChoose=bandSwapp;
   switch (bandChoose)
@@ -759,7 +726,7 @@ while(digitalRead(dpInEncoderPress)==1) {}
 DDS.vna(dds_reg,Normal);
 delay(10);
 lcd.clear();
-mesure();
+measure();
 DDS.vna(dds_reg,PowerDown);
 EEPROM.write(1,(byte) adcmag);
 EEPROM.write(2,(byte) (adcmag>>8));
