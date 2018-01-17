@@ -1,5 +1,5 @@
-#include <Arduino.h>
-#include "main.h"
+
+
 /* Vna
  Anthony LE CREN F4GOH@orange.fr
  Created 03/03/2015
@@ -59,7 +59,7 @@ exemple : retrouver la fréquence a partir de DS_FTW
 74082466 * 180000000 / 4294967296.0 = 3104760,28 HZ
 
 */
-
+//TODO: add pages for LCD_2line
 
 #include <avr/pgmspace.h>
 #include <Wire.h>
@@ -70,7 +70,8 @@ exemple : retrouver la fréquence a partir de DS_FTW
 
 
 #define MinFrq 23860900 // FTW  min freq = 1 Mhz
-#define MaxFrq 1431655765 // FTW  max freq = 60 Mhz
+//#define MaxFrq 1431655765 // FTW  max freq = 60 Mhz
+#define MaxFrq 2431655765 // FTW  max freq = 60 Mhz
 #define freqMin  1000000
 #define freqMax 60000000
 
@@ -88,8 +89,6 @@ unsigned int intTemp;    //variable de boucle pour le balayage
 unsigned int adcmag;     //variables des 2 ADC mesures
 unsigned int adcphs;
 boolean check=0;
-
-
 
 #define led  6        //Affectation des broches
 #define Rele  5       //relais refexion, transmission
@@ -131,9 +130,6 @@ struct vector_transmission{
   float TP;
 };
 
-
-
-
 volatile long freq = 5000000;
 byte vnaMode=0;
 volatile byte menuSwapp=0;
@@ -146,10 +142,27 @@ double dds_reg;
 long freq_prec = 0;
 long freqStep = 0;
 
-LiquidCrystal_I2C lcd(0x27, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE);    //4 lines *20 columns lcd char
 
+void delete_char(byte line, byte start, byte end);
+void calculDut(int adcMag, int adcPhs);
+void vna_print();
+void calibration();
+void vna_print_unites();
+void bandSelect();
+void BCD (unsigned long b, char* o);
+double ticksToFreq(long f);
+void mesure();
+void doEncoder();
+void boot_menu();
+void menuJvna(byte PB);
+char getRX(void);
+void Jnva();
+void sweep();
+char DecodeCom (void);
+void affiche_freqs(void);
+void magPhsADC();
 
-
+LiquidCrystal_I2C lcd(0x27, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE);
 
 void(* resetFunc) (void) = 0; //declare reset function @ address 0
 
@@ -159,7 +172,6 @@ int freeRam ()
   int v;
   return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
 }
-
 
 void setup(){
 
@@ -179,32 +191,24 @@ DDS.vna(dds_reg,Normal);
 delay(1);
 DDS.vna(dds_reg,PowerDown);
 
-
-  pinMode(dpInEncoderA, INPUT);
-  digitalWrite(dpInEncoderA, HIGH);
-  pinMode(dpInEncoderB, INPUT);
-  digitalWrite(dpInEncoderB, HIGH);
-  pinMode(dpInEncoderPress, INPUT);
-  digitalWrite(dpInEncoderPress, HIGH);
-
-
-
-
+pinMode(dpInEncoderA, INPUT);
+digitalWrite(dpInEncoderA, HIGH);
+pinMode(dpInEncoderB, INPUT);
+digitalWrite(dpInEncoderB, HIGH);
+pinMode(dpInEncoderPress, INPUT);
+digitalWrite(dpInEncoderPress, HIGH);
 
 adcmag=EEPROM.read(2)*256+EEPROM.read(1);
 adcphs=EEPROM.read(4)*256+EEPROM.read(3);
 calMag=((float)adcmag*adc2Db)+offsetDb;
 calPhs=((float)adcphs*Adc2Angle);
-Serial.println(calMag);              //verif calibration
-Serial.println(calPhs);
-
-
-
+//Serial.println(calMag);              //verif calibration
+//Serial.println(calPhs);
 
   lcd.clear();
-  lcd.print(F("     VNA v1.0"));    //intro
-  lcd.setCursor(0, 2);
-  lcd.print(F("    F4GOH 2015"));
+  lcd.print(F("VNA v1.0"));    //intro
+  lcd.setCursor(0, 1);
+  lcd.print(F("F4GOH 2015"));
   delay(4000);
   lcd.clear();
 
@@ -213,7 +217,6 @@ boot_menu();
 
 
 menuChoose=EEPROM.read(0);
-//menuChoose=0;
 
 switch(menuChoose)
 {
@@ -230,7 +233,7 @@ case 2 :  bandSelect(); break;           //standalone
 //main loop
 
 void loop(){
-
+//menuChoose=0; //TODO delete that
 switch(menuChoose)
 {
 case 0 :  Jnva();   break;      //jvna
@@ -613,7 +616,6 @@ Serial.println(Point.Swr);
  * Encoder
  ********************************************************/
 
-
 void doEncoder() {
   if (digitalRead(dpInEncoderA) == digitalRead(dpInEncoderB)) {
     menuSwapp=(menuSwapp+1)%4;
@@ -655,16 +657,17 @@ void lcd_menu_analyse_refection()
 
 void boot_menu()
 {
+  const uint8_t row_lines=2;
   if (digitalRead(dpInEncoderPress)==1) return;
   lcd.clear();
   lcd.setCursor(1, 0);
   lcd.print(F("JVna PC"));
   lcd.setCursor(1, 1);
-  lcd.print(F("Blue Vna Android"));
+  lcd.print(F("Blue Vna"));
   lcd.setCursor(1, 2);
   lcd.print(F("Standalone Reflect."));
   lcd.setCursor(1, 3);
-  lcd.print(F("Calibration    V1.0"));
+  lcd.print(F("Calib. V1.0"));
   while(digitalRead(dpInEncoderPress)==0) {}  //BP rise down detect
   while(digitalRead(dpInEncoderPress)==1) {
   for (byte n=0;n<=3;n++) {
@@ -673,7 +676,7 @@ void boot_menu()
         }
   }
   menuChoose=menuSwapp;
-  for (byte n=0;n<=3;n++) {
+  for (byte n=0;n<3;n++) {
           if (menuChoose!=n) {
                            for (byte m=0;m<20;m++) {
                               lcd.setCursor(m, n);
@@ -745,8 +748,6 @@ void vna_print_unites()
  * Calibration
  * one point calibration only
  ********************************************************/
-
-
 void calibration()
 {
 lcd.clear();
@@ -768,9 +769,7 @@ delay(2000);
 lcd.clear();
 lcd.print(F("Done"));
 lcd.setCursor(0, 1);
-lcd.print(F("Press button to"));
-lcd.setCursor(0, 2);
-lcd.print(F("return normal mode"));
+lcd.print(F("Press button"));
 while(digitalRead(dpInEncoderPress)==0) {}  //BP rise down detect
 while(digitalRead(dpInEncoderPress)==1) {}
 delay(2000);
