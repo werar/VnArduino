@@ -59,7 +59,7 @@ exemple : retrouver la fréquence a partir de DS_FTW
 74082466 * 180000000 / 4294967296.0 = 3104760,28 HZ
 
 */
-//TODO: add pages for LCD_2line
+//TODO: fix probelm with standard LiquidCrystal_I2C.h library (used as dependency has some compilatioin errors)
 
 #include <avr/pgmspace.h>
 #include <Wire.h>
