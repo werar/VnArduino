@@ -56,7 +56,7 @@ la gestion d'une carte sd
 #define PowerDown 0x04  //  Power down AD9851,50
 #define REFCLOCK6 0x01     //  AD9851 RFCLK multiplier enable x 6 en mode normal
 
-#define SYSTEM_CLOCK 180000000.0 //120000000.0   //fake AD9851 in my hardware warks only x4 (120 000000 not x6  180000000.0)
+#define SYSTEM_CLOCK 180000000.0 //120000000.0  fake AD9851 in my hardware warks only x4 (120 000000 not x6  180000000.0)
 #define POWER32 4294967296.0
 
 #define freqMin 100000
@@ -87,11 +87,6 @@ la gestion d'une carte sd
 #define LCD_CHARS_IN_ROW 20
 
 #define STAR_SYMBOL 42
-
-
-//#define calMag 0.703125      //before calibrate function
-//#define calPhs 1.58203125
-
 
 struct vector_reflection{
   double Freq;

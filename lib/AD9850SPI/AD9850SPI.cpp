@@ -1,7 +1,7 @@
 /********************************************************************************************
  * Arduino library for AD9850
  * Created 23/08/2014
- * Christophe Caiveau f4goj@free.fr 
+ * Christophe Caiveau f4goj@free.fr
  * Upgrade to SPI Anthony F4GOH
  *
  * This library uses the Serial Peripheral Interface (SPI) to accelerate the update
@@ -10,14 +10,14 @@
  *
  * Use this library freely
  *
- * Hardware connections : 
+ * Hardware connections :
  * W_CLK   -> D13 arduino UNO/NANO, D52 MEGA
  * FQ_UD   -> any pin except 10 and 12 UNO/NANO, 50 and 53 MEGA
  * DATA/D7 -> D11 arduino UNO/NANO, D51 MEGA
  * RESET   -> any pin except 10 and 12 UNO/NANO, 50 and 53 MEGA
  *
  * Functions :
- * DDS.begin(W_CLK pin, FQ_UD pin, RESET pin); Initialize the output pins and master reset the AD9850 
+ * DDS.begin(W_CLK pin, FQ_UD pin, RESET pin); Initialize the output pins and master reset the AD9850
  * DDS.calibrate(frequency); Compensation of crystal oscillator frequency
  * DDS.setfreq(frequency,phase); frequency in Hz, phase coded on 5 bits
  * DDS.down(); power down mode reducing the dissipated power from 380mW to 30mW @5V
@@ -42,7 +42,7 @@ void AD9850SPI::begin(int w_clk, int fq_ud, int reset) {
 	RESET = reset;
 	deltaphase = 0;
 	phase = 0;
-	calibFreq = 125000000;
+	calibFreq = SYSTEM_CLOCK;
 	begin_priv();
 }
 
@@ -50,7 +50,7 @@ void AD9850SPI::begin_priv() {
 	pinMode(W_CLK, OUTPUT);
 	pinMode(FQ_UD, OUTPUT);
 	pinMode(RESET, OUTPUT);
-	
+
 	SPI.setClockDivider(SPI_CLOCK_DIV4);
 	SPI.setBitOrder(LSBFIRST);
 	SPI.setDataMode(SPI_MODE0);
@@ -71,7 +71,7 @@ void AD9850SPI::update() {
 
 
 void AD9850SPI::setfreq(double f, uint8_t p) {
-	deltaphase = f * 4294967296.0 / calibFreq;
+	deltaphase = f * 4294967296.0 / calibFreq;  //2^32=4294967296
 	phase = p << 3;
 	update();
 }
@@ -82,7 +82,7 @@ void AD9850SPI::down() {
 	SPI.transfer(0x04);
 	pulse(FQ_UD);
 }
-    
+
 
 void AD9850SPI::up() {
 	update();
@@ -96,7 +96,7 @@ void AD9850SPI::calibrate(double TrimFreq)
 
 void AD9850SPI::powerOn(){
   pinMode(11, OUTPUT);
-  delay(100);  
+  delay(100);
   wakeUp();
   delay(100);
   update();
@@ -110,7 +110,7 @@ void AD9850SPI::wakeUp()
 {
  pulse(RESET);
  pulse(W_CLK);
- pulse(FQ_UD); 
+ pulse(FQ_UD);
 }
 
 void AD9850SPI::pulse(int pin) {
